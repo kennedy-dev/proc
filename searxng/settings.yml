@@ -17,6 +17,22 @@ search:
   safe_search: 0
   autocomplete: ""
 
+engines:
+  - name: google
+    disabled: true
+  - name: duckduckgo
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: bing
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: wikipedia
+    disabled: false
+
 # Optional: only used if you later re-enable the limiter / stats.
 redis:
   url: redis://valkey:6379/0
