@@ -1,0 +1,9 @@
+# Automatic HTTPS for the n8n editor.
+# Caddy fetches and renews a Let's Encrypt certificate for $N8N_DOMAIN.
+# Requires ports 80 and 443 reachable from the internet and DNS pointing here.
+{$N8N_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy n8n:5678 {
+		flush_interval -1
+	}
+}

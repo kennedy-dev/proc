@@ -1,0 +1,22 @@
+# SearXNG settings for a PRIVATE instance queried by your own n8n.
+# Only overrides the stock defaults (use_default_settings: true).
+use_default_settings: true
+
+server:
+  # REQUIRED. Generate:  openssl rand -hex 32
+  secret_key: "CHANGE_ME_openssl_rand_hex_32"
+  # This is your own instance hit by your own automation — turn the bot/rate
+  # limiter OFF so n8n's JSON queries are not blocked.
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json          # REQUIRED — without this, n8n's /search?format=json returns 403
+  safe_search: 0
+  autocomplete: ""
+
+# Optional: only used if you later re-enable the limiter / stats.
+redis:
+  url: redis://valkey:6379/0

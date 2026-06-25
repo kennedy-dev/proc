@@ -1,0 +1,494 @@
+{
+  "name": "Gov Opportunity Scout — KE software dev + US reconciliation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "4ab90147-9daf-41b3-88ef-b43dec7e54b5",
+      "name": "Daily 07:00 — KE scan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Kenya — government software-development opportunity queries.\n// Discovery backend: SearXNG (open-source metasearch). Point this at your instance:\n//   • preferred: set an n8n env var  SEARXNG_URL=https://searx.example.org\n//   • or just edit the `base` fallback on the next line.\nlet base = 'http://searxng:8080';\ntry { if ($env && $env.SEARXNG_URL) base = $env.SEARXNG_URL; } catch (e) {}\nbase = String(base).replace(/\\/+$/, '');\n\n// Edit / add queries freely. SearXNG honours the site: and OR operators.\nconst queries = [\n  '(\"software development\" OR \"system development\" OR \"application development\" OR \"information system\") (tender OR \"request for proposal\" OR \"expression of interest\" OR prequalification) site:go.ke',\n  '(software OR ICT OR \"e-government\" OR digital OR automation OR ERP) (tender OR EOI OR RFP OR \"request for proposal\") (county OR ministry OR authority OR parastatal) Kenya',\n  'software development tender site:tenders.go.ke',\n  '(\"request for proposal\" OR \"expression of interest\" OR prequalification) (software OR \"information system\" OR ERP OR portal) county government Kenya',\n  '(software OR \"management system\" OR \"web application\" OR \"mobile application\") (tender OR procurement) (\"national treasury\" OR ministry OR county OR commission) Kenya',\n];\n\nreturn queries.map((q) => {\n  const url = base + '/search?q=' + encodeURIComponent(q) +\n    '&format=json&language=en-KE&safesearch=0&time_range=month';\n  return { json: { q, url, stream: 'KE' } };\n});\n"
+      },
+      "id": "0cbed793-89a9-4615-b316-f2abc64d284e",
+      "name": "KE — build queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "gov-opportunity-scout/1.0 (+n8n)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "4c53dad7-b528-48e4-895c-6b7f347887f9",
+      "name": "KE — SearXNG search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        320
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Flatten SearXNG results, normalize, and keep only relevant hits.\n// Relevance = (a primary keyword) AND (a context keyword), minus an exclude list.\n// Branches on item.json.stream so the same node works for both streams.\nconst KW = {\n  KE: {\n    primary: ['software','application development','app development','system development',\n      'information system','management system','ict','e-government','egovernment','digital service',\n      'automation','erp','web application','web-based','mobile application','platform','api','integration',\n      'bespoke','custom system','portal','database system','enterprise system','source code','saas'],\n    context: ['tender','rfp','request for proposal','rfq','request for quotation','expression of interest',\n      'eoi','prequalification','pre-qualification','bid','procurement','solicitation','invitation to tender',\n      '.go.ke','county','ministry','authority','national treasury','huduma'],\n    exclude: [],\n  },\n  US: {\n    primary: ['reconciliation','reconcile','reconciling','bank reconciliation','account reconciliation',\n      'financial reconciliation','cash reconciliation','gl reconciliation','general ledger reconciliation',\n      'treasury reconciliation','payment reconciliation','ledger reconciliation'],\n    context: ['rfp','rfq','request for proposal','request for qualifications','itb','ifb','invitation to bid',\n      'solicitation','bid','procurement','rfi','.gov','city','county','state','municipal','treasurer',\n      'comptroller','controller','finance department'],\n    exclude: ['sam.gov','grants.gov','beta.sam.gov'],\n  },\n};\n\nconst out = [];\nfor (const item of $input.all()) {\n  const stream = item.json.stream || 'KE';\n  const cfg = KW[stream] || KW.KE;\n  const results = Array.isArray(item.json.results) ? item.json.results : [];\n  for (const r of results) {\n    const url = r.url || '';\n    const title = r.title || '';\n    const snippet = r.content || '';\n    if (!url || !title) continue;\n    const hay = (title + ' ' + snippet + ' ' + url).toLowerCase();\n    if (cfg.exclude.some((x) => hay.includes(x))) continue;\n    const hasPrimary = cfg.primary.some((x) => hay.includes(x));\n    const hasContext = cfg.context.some((x) => hay.includes(x));\n    if (!(hasPrimary && hasContext)) continue;\n    let domain = '';\n    try { domain = new URL(url).hostname.replace(/^www\\./, ''); } catch (e) {}\n    const matched = cfg.primary.filter((x) => hay.includes(x)).slice(0, 4);\n    out.push({ json: {\n      stream, title: title.trim(), url, snippet: snippet.trim(),\n      domain, engine: r.engine || '', matched, query: item.json.q,\n    } });\n  }\n}\nreturn out;\n"
+      },
+      "id": "b226485d-83fd-4604-a2ba-1a5d3955be6e",
+      "name": "KE — normalize & filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// De-duplicate against everything seen on previous runs.\n// Uses n8n workflow static data (persists only when the workflow is ACTIVE and\n// fired by its trigger — not on manual test executions).\nconst staticData = $getWorkflowStaticData('global');\nconst items = $input.all();\nconst stream = items.length ? (items[0].json.stream || 'KE') : 'KE';\nconst key = 'seen_' + stream;\nconst seen = (staticData[key] = staticData[key] || {});\n\nconst now = Date.now();\nconst out = [];\nfor (const item of items) {\n  const url = item.json.url;\n  if (!url) continue;\n  if (!seen[url]) {\n    seen[url] = now;\n    out.push(item);\n  }\n}\n\n// Prune entries older than 90 days so static data can't grow forever.\nconst cutoff = now - 90 * 24 * 60 * 60 * 1000;\nfor (const k of Object.keys(seen)) {\n  if (seen[k] < cutoff) delete seen[k];\n}\n\nreturn out;\n"
+      },
+      "id": "59655db3-2037-4680-8a33-b3e50a6a7fe0",
+      "name": "KE — dedup vs prior runs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build a single HTML digest item from the new results.\n// Returns [] when there is nothing new, so the email node simply doesn't fire.\nconst items = $input.all();\nif (!items.length) return [];\n\nfunction escapeHtml(s) {\n  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n}\n\nconst stream = items[0].json.stream || 'KE';\nconst titleMap = {\n  KE: 'Kenya \\u2014 government software-development opportunities',\n  US: 'US state & city \\u2014 reconciliation solicitations',\n};\nconst heading = titleMap[stream] || 'Opportunities';\nconst today = new Date().toISOString().slice(0, 10);\nconst count = items.length;\n\nconst rowsHtml = items.map((i) => {\n  const j = i.json;\n  const tags = (j.matched && j.matched.length) ? j.matched.join(', ') : '';\n  return [\n    '<tr><td style=\"padding:10px 12px;border-bottom:1px solid #e3e8ea;vertical-align:top;\">',\n    '<a href=\"' + j.url + '\" style=\"color:#1F6F78;font-weight:bold;text-decoration:none;font-size:15px;\">' + escapeHtml(j.title) + '</a>',\n    '<div style=\"color:#5C6B70;font-size:12px;margin:2px 0 6px;\">' + escapeHtml(j.domain || '') +\n      (tags ? ' &nbsp;\\u00b7&nbsp; matched: ' + escapeHtml(tags) : '') + '</div>',\n    '<div style=\"color:#1A2B30;font-size:13px;line-height:1.45;\">' + escapeHtml((j.snippet || '').slice(0, 280)) + '</div>',\n    '</td></tr>',\n  ].join('');\n}).join('');\n\nconst html = [\n  '<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;\">',\n  '<h2 style=\"color:#13343B;margin:0 0 4px;\">' + heading + '</h2>',\n  '<div style=\"color:#5C6B70;font-size:13px;margin-bottom:14px;\">' + count + ' new result' + (count === 1 ? '' : 's') + ' \\u00b7 ' + today + '</div>',\n  '<table style=\"width:100%;border-collapse:collapse;border:1px solid #e3e8ea;\">' + rowsHtml + '</table>',\n  '<p style=\"color:#9aa7ab;font-size:11px;margin-top:14px;\">Automated scan via n8n + SearXNG. Verify each opportunity on the issuing portal before acting; results are de-duplicated against prior runs.</p>',\n  '</div>',\n].join('');\n\nconst subject = '[' + stream + '] ' + heading + ' \\u2014 ' + count + ' new (' + today + ')';\n\nreturn [{ json: { subject, html, count, stream } }];\n"
+      },
+      "id": "387ede3c-7c56-430e-88f2-fff76c8ec058",
+      "name": "KE — build digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "scout@your-domain.example",
+        "toEmail": "opportunities@your-domain.example",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "786bf2be-8e76-432a-8380-c58d265ed01f",
+      "name": "KE — email digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        320
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "cd2c857f-e487-4482-b6e9-986b1b81a2d7",
+      "name": "KE — add Slack/Sheets here",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        470
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "fe28df97-ec6d-4147-b597-85006a7bd9a0",
+      "name": "Daily 07:30 — US scan",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// US — reconciliation solicitations from state & city governments.\n// Discovery backend: SearXNG (open-source metasearch).\n//   • preferred: set an n8n env var  SEARXNG_URL=https://searx.example.org\n//   • or edit the `base` fallback below.\nlet base = 'http://searxng:8080';\ntry { if ($env && $env.SEARXNG_URL) base = $env.SEARXNG_URL; } catch (e) {}\nbase = String(base).replace(/\\/+$/, '');\n\n// Biased toward state/city/county (not federal). Edit freely.\nconst queries = [\n  '(reconciliation OR \"bank reconciliation\" OR \"account reconciliation\") (\"request for proposal\" OR RFP OR RFQ OR solicitation OR \"invitation to bid\") (city OR county OR state) site:gov',\n  '(\"reconciliation software\" OR \"reconciliation services\" OR \"reconciliation solution\") (RFP OR solicitation OR bid OR RFQ) (city OR county OR state) government',\n  '\"bank reconciliation\" (RFP OR RFQ OR \"invitation to bid\") (city OR county) procurement',\n  '(reconciliation) (solicitation OR RFP) (treasurer OR comptroller OR controller OR \"finance department\") (city OR county OR state)',\n  'reconciliation (RFP OR solicitation) (site:bidnetdirect.com OR site:demandstar.com OR site:bonfirehub.com OR site:periscopeholdings.com)',\n];\n\nreturn queries.map((q) => {\n  const url = base + '/search?q=' + encodeURIComponent(q) +\n    '&format=json&language=en-US&safesearch=0&time_range=month';\n  return { json: { q, url, stream: 'US' } };\n});\n"
+      },
+      "id": "06c2c1f4-f192-4496-b093-f5bdb96feabc",
+      "name": "US — build queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "gov-opportunity-scout/1.0 (+n8n)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "c780b881-b08a-445c-bfca-eff7082fb98a",
+      "name": "US — SearXNG search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        760
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Flatten SearXNG results, normalize, and keep only relevant hits.\n// Relevance = (a primary keyword) AND (a context keyword), minus an exclude list.\n// Branches on item.json.stream so the same node works for both streams.\nconst KW = {\n  KE: {\n    primary: ['software','application development','app development','system development',\n      'information system','management system','ict','e-government','egovernment','digital service',\n      'automation','erp','web application','web-based','mobile application','platform','api','integration',\n      'bespoke','custom system','portal','database system','enterprise system','source code','saas'],\n    context: ['tender','rfp','request for proposal','rfq','request for quotation','expression of interest',\n      'eoi','prequalification','pre-qualification','bid','procurement','solicitation','invitation to tender',\n      '.go.ke','county','ministry','authority','national treasury','huduma'],\n    exclude: [],\n  },\n  US: {\n    primary: ['reconciliation','reconcile','reconciling','bank reconciliation','account reconciliation',\n      'financial reconciliation','cash reconciliation','gl reconciliation','general ledger reconciliation',\n      'treasury reconciliation','payment reconciliation','ledger reconciliation'],\n    context: ['rfp','rfq','request for proposal','request for qualifications','itb','ifb','invitation to bid',\n      'solicitation','bid','procurement','rfi','.gov','city','county','state','municipal','treasurer',\n      'comptroller','controller','finance department'],\n    exclude: ['sam.gov','grants.gov','beta.sam.gov'],\n  },\n};\n\nconst out = [];\nfor (const item of $input.all()) {\n  const stream = item.json.stream || 'KE';\n  const cfg = KW[stream] || KW.KE;\n  const results = Array.isArray(item.json.results) ? item.json.results : [];\n  for (const r of results) {\n    const url = r.url || '';\n    const title = r.title || '';\n    const snippet = r.content || '';\n    if (!url || !title) continue;\n    const hay = (title + ' ' + snippet + ' ' + url).toLowerCase();\n    if (cfg.exclude.some((x) => hay.includes(x))) continue;\n    const hasPrimary = cfg.primary.some((x) => hay.includes(x));\n    const hasContext = cfg.context.some((x) => hay.includes(x));\n    if (!(hasPrimary && hasContext)) continue;\n    let domain = '';\n    try { domain = new URL(url).hostname.replace(/^www\\./, ''); } catch (e) {}\n    const matched = cfg.primary.filter((x) => hay.includes(x)).slice(0, 4);\n    out.push({ json: {\n      stream, title: title.trim(), url, snippet: snippet.trim(),\n      domain, engine: r.engine || '', matched, query: item.json.q,\n    } });\n  }\n}\nreturn out;\n"
+      },
+      "id": "a6dbcf07-a0f6-428f-963e-47292ce6c6f5",
+      "name": "US — normalize & filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// De-duplicate against everything seen on previous runs.\n// Uses n8n workflow static data (persists only when the workflow is ACTIVE and\n// fired by its trigger — not on manual test executions).\nconst staticData = $getWorkflowStaticData('global');\nconst items = $input.all();\nconst stream = items.length ? (items[0].json.stream || 'KE') : 'KE';\nconst key = 'seen_' + stream;\nconst seen = (staticData[key] = staticData[key] || {});\n\nconst now = Date.now();\nconst out = [];\nfor (const item of items) {\n  const url = item.json.url;\n  if (!url) continue;\n  if (!seen[url]) {\n    seen[url] = now;\n    out.push(item);\n  }\n}\n\n// Prune entries older than 90 days so static data can't grow forever.\nconst cutoff = now - 90 * 24 * 60 * 60 * 1000;\nfor (const k of Object.keys(seen)) {\n  if (seen[k] < cutoff) delete seen[k];\n}\n\nreturn out;\n"
+      },
+      "id": "b3f4b7d7-a9b2-4a18-b649-449f3d3937f6",
+      "name": "US — dedup vs prior runs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build a single HTML digest item from the new results.\n// Returns [] when there is nothing new, so the email node simply doesn't fire.\nconst items = $input.all();\nif (!items.length) return [];\n\nfunction escapeHtml(s) {\n  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n}\n\nconst stream = items[0].json.stream || 'KE';\nconst titleMap = {\n  KE: 'Kenya \\u2014 government software-development opportunities',\n  US: 'US state & city \\u2014 reconciliation solicitations',\n};\nconst heading = titleMap[stream] || 'Opportunities';\nconst today = new Date().toISOString().slice(0, 10);\nconst count = items.length;\n\nconst rowsHtml = items.map((i) => {\n  const j = i.json;\n  const tags = (j.matched && j.matched.length) ? j.matched.join(', ') : '';\n  return [\n    '<tr><td style=\"padding:10px 12px;border-bottom:1px solid #e3e8ea;vertical-align:top;\">',\n    '<a href=\"' + j.url + '\" style=\"color:#1F6F78;font-weight:bold;text-decoration:none;font-size:15px;\">' + escapeHtml(j.title) + '</a>',\n    '<div style=\"color:#5C6B70;font-size:12px;margin:2px 0 6px;\">' + escapeHtml(j.domain || '') +\n      (tags ? ' &nbsp;\\u00b7&nbsp; matched: ' + escapeHtml(tags) : '') + '</div>',\n    '<div style=\"color:#1A2B30;font-size:13px;line-height:1.45;\">' + escapeHtml((j.snippet || '').slice(0, 280)) + '</div>',\n    '</td></tr>',\n  ].join('');\n}).join('');\n\nconst html = [\n  '<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;\">',\n  '<h2 style=\"color:#13343B;margin:0 0 4px;\">' + heading + '</h2>',\n  '<div style=\"color:#5C6B70;font-size:13px;margin-bottom:14px;\">' + count + ' new result' + (count === 1 ? '' : 's') + ' \\u00b7 ' + today + '</div>',\n  '<table style=\"width:100%;border-collapse:collapse;border:1px solid #e3e8ea;\">' + rowsHtml + '</table>',\n  '<p style=\"color:#9aa7ab;font-size:11px;margin-top:14px;\">Automated scan via n8n + SearXNG. Verify each opportunity on the issuing portal before acting; results are de-duplicated against prior runs.</p>',\n  '</div>',\n].join('');\n\nconst subject = '[' + stream + '] ' + heading + ' \\u2014 ' + count + ' new (' + today + ')';\n\nreturn [{ json: { subject, html, count, stream } }];\n"
+      },
+      "id": "65a89aed-118a-4898-8ebc-3e7cd901e819",
+      "name": "US — build digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "scout@your-domain.example",
+        "toEmail": "opportunities@your-domain.example",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "6b0004ce-c691-4e87-9752-f80b3b3628cc",
+      "name": "US — email digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        760
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "e61ad52c-f335-4b10-9cc1-0d2f68ef1526",
+      "name": "US — add Slack/Sheets here",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        910
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Gov Opportunity Scout\nTwo independent daily streams:\n1. **Kenya** — government **software-development** tenders/RFPs/EOIs (national, county, parastatal).\n2. **US** — **reconciliation** solicitations from **state & city** governments.\n\n**100% open-source stack:** n8n (community) + SearXNG (search) + SMTP (alerts). No paid APIs.\n\n### Setup (5 steps)\n1. Run a **SearXNG** instance and enable the JSON API (in `settings.yml`: `search.formats: [html, json]`).\n2. Set n8n env var **`SEARXNG_URL`** to its address (e.g. `https://searx.example.org`), or edit the fallback in the *build queries* nodes.\n3. Open each **email digest** node → pick your **SMTP** credential, set from/to.\n4. **Save**, then toggle the workflow **Active** (dedup memory only persists when active).\n5. Adjust the cron in the **trigger** nodes if you want a different time/frequency.",
+        "height": 470,
+        "width": 1180,
+        "color": 4
+      },
+      "id": "4c0822c7-ba85-480d-a159-edb427209479",
+      "name": "Note 7b7a",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### SearXNG note\nThese nodes call `GET {SEARXNG_URL}/search?...&format=json`.\nIf you get a 403, JSON format is disabled — enable it in SearXNG `settings.yml`.\n\nPrefer a different engine? Swap the **SearXNG search** HTTP node for Brave/Google/Bing API\nand keep the rest; just map results to `{title, url, content}` in *normalize*.",
+        "height": 220,
+        "width": 360,
+        "color": 5
+      },
+      "id": "1f5ecffd-5a19-409f-83c4-e6c0f239fe52",
+      "name": "Note 169b",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        440,
+        70
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Tune relevance & sources\n• **build queries** node = the search strings (add portals, counties, states).\n• **normalize & filter** node = the keyword sets (primary AND context, minus exclude).\n• **dedup** keeps a 90-day memory of seen URLs per stream.\n• The **No-Op** node is the extension point: add Slack, Telegram, Google Sheets,\n  NocoDB or Baserow after it to log/notify.",
+        "height": 220,
+        "width": 430,
+        "color": 6
+      },
+      "id": "22b5b456-a076-4608-8bbe-2ff797fb95e2",
+      "name": "Note 37c8",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        880,
+        70
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Legal / etiquette\nSearches public portals only. Respect each site's robots.txt & terms,\nkeep the daily cadence gentle, and confirm every opportunity on the\nofficial issuing portal before acting.",
+        "height": 170,
+        "width": 430,
+        "color": 3
+      },
+      "id": "fbddca97-aac3-41bf-a588-f7931bf93007",
+      "name": "Note e359",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        1010
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 07:00 — KE scan": {
+      "main": [
+        [
+          {
+            "node": "KE — build queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KE — build queries": {
+      "main": [
+        [
+          {
+            "node": "KE — SearXNG search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KE — SearXNG search": {
+      "main": [
+        [
+          {
+            "node": "KE — normalize & filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KE — normalize & filter": {
+      "main": [
+        [
+          {
+            "node": "KE — dedup vs prior runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KE — dedup vs prior runs": {
+      "main": [
+        [
+          {
+            "node": "KE — build digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KE — build digest": {
+      "main": [
+        [
+          {
+            "node": "KE — email digest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "KE — add Slack/Sheets here",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 07:30 — US scan": {
+      "main": [
+        [
+          {
+            "node": "US — build queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "US — build queries": {
+      "main": [
+        [
+          {
+            "node": "US — SearXNG search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "US — SearXNG search": {
+      "main": [
+        [
+          {
+            "node": "US — normalize & filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "US — normalize & filter": {
+      "main": [
+        [
+          {
+            "node": "US — dedup vs prior runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "US — dedup vs prior runs": {
+      "main": [
+        [
+          {
+            "node": "US — build digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "US — build digest": {
+      "main": [
+        [
+          {
+            "node": "US — email digest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "US — add Slack/Sheets here",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
